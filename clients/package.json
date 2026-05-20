@@ -1,0 +1,15 @@
+{
+  "name": "clients",
+  "version": "1.0.0",
+  "description": "Clients that test the signalling server.",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "test-client.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "ws": "^8.20.1"
+  }
+}
