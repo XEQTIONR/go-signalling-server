@@ -1,0 +1,216 @@
+package main
+
+import (
+    "encoding/json"
+    "log"
+    "time"
+    
+    "github.com/gorilla/websocket"
+)
+
+const (
+    writeWait = 10 * time.Second
+    pongWait = 60 * time.Second
+    pingPeriod = (pongWait * 9) / 10
+    maxMessageSize = 8192
+)
+
+type Client struct {
+    hub  *Hub
+    conn *websocket.Conn
+    send chan []byte
+    id   string
+}
+
+// WebRTC signaling message types
+type SignalMessage struct {
+    Type    string          `json:"type"`
+    From    string          `json:"from,omitempty"`
+    To      string          `json:"to,omitempty"`
+    Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+func (c *Client) readPump() {
+    defer func() {
+        c.hub.unregister <- c
+        c.conn.Close()
+    }()
+    
+    c.conn.SetReadLimit(maxMessageSize)
+    c.conn.SetReadDeadline(time.Now().Add(pongWait))
+    c.conn.SetPongHandler(func(string) error {
+        c.conn.SetReadDeadline(time.Now().Add(pongWait))
+        return nil
+    })
+    
+    for {
+        _, message, err := c.conn.ReadMessage()
+        if err != nil {
+            if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+                log.Printf("WebSocket error: %v", err)
+            }
+            break
+        }
+        
+        var msg SignalMessage
+        if err := json.Unmarshal(message, &msg); err != nil {
+            log.Printf("Invalid JSON: %v", err)
+            continue
+        }
+        
+        c.handleMessage(msg)
+    }
+}
+
+func (c *Client) handleMessage(msg SignalMessage) {
+    switch msg.Type {
+    case "register":
+        // Client sends: {"type":"register","payload":{"userId":"alice123"}}
+        var registerData struct {
+            UserID string `json:"userId"`
+        }
+        if err := json.Unmarshal(msg.Payload, &registerData); err != nil {
+            c.sendError("Invalid register payload")
+            return
+        }
+        
+        if c.id != "" {
+            c.sendError("Already registered")
+            return
+        }
+        
+        if !c.hub.RegisterClient(c, registerData.UserID) {
+            c.sendError("User already connected")
+            return
+        }
+        
+        c.sendSuccess("Registered successfully")
+        
+    case "call":
+        // {"type":"call","to":"bob456","payload":{"sdp":"..."}}
+        if c.id == "" {
+            c.sendError("Not registered")
+            return
+        }
+        
+        if msg.To == "" {
+            c.sendError("Missing target user")
+            return
+        }
+        
+        // Forward offer to target user
+        forwardMsg := SignalMessage{
+            Type:    "incoming_call",
+            From:    c.id,
+            Payload: msg.Payload,
+        }
+        
+        data, _ := json.Marshal(forwardMsg)
+        if !c.hub.SendToUser(msg.To, data) {
+            c.sendError("User not connected: " + msg.To)
+        }
+        
+    case "answer":
+        // {"type":"answer","to":"alice123","payload":{"sdp":"..."}}
+        if c.id == "" {
+            c.sendError("Not registered")
+            return
+        }
+        
+        forwardMsg := SignalMessage{
+            Type:    "call_answered",
+            From:    c.id,
+            Payload: msg.Payload,
+        }
+        
+        data, _ := json.Marshal(forwardMsg)
+        c.hub.SendToUser(msg.To, data)
+        
+    case "ice-candidate":
+        // {"type":"ice-candidate","to":"bob456","payload":{"candidate":"..."}}
+        if c.id == "" {
+            c.sendError("Not registered")
+            return
+        }
+        
+        forwardMsg := SignalMessage{
+            Type:    "ice-candidate",
+            From:    c.id,
+            Payload: msg.Payload,
+        }
+        
+        data, _ := json.Marshal(forwardMsg)
+        c.hub.SendToUser(msg.To, data)
+        
+    case "hangup":
+        // {"type":"hangup","to":"bob456"}
+        if c.id == "" {
+            return
+        }
+        
+        forwardMsg := SignalMessage{
+            Type: "hangup",
+            From: c.id,
+        }
+        
+        data, _ := json.Marshal(forwardMsg)
+        c.hub.SendToUser(msg.To, data)
+        
+    default:
+        log.Printf("Unknown message type: %s", msg.Type)
+        c.sendError("Unknown message type")
+    }
+}
+
+func (c *Client) writePump() {
+    ticker := time.NewTicker(pingPeriod)
+    defer func() {
+        ticker.Stop()
+        c.conn.Close()
+    }()
+    
+    for {
+        select {
+        case message, ok := <-c.send:
+            c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+            if !ok {
+                c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+                return
+            }
+            
+            if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+                return
+            }
+            
+        case <-ticker.C:
+            c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+            if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+                return
+            }
+        }
+    }
+}
+
+func (c *Client) sendError(message string) {
+    errorMsg := SignalMessage{
+        Type: "error",
+        Payload: json.RawMessage(`"` + message + `"`),
+    }
+    data, _ := json.Marshal(errorMsg)
+    select {
+    case c.send <- data:
+    default:
+    }
+}
+
+func (c *Client) sendSuccess(message string) {
+    successMsg := SignalMessage{
+        Type: "success",
+        Payload: json.RawMessage(`"` + message + `"`),
+    }
+    data, _ := json.Marshal(successMsg)
+    select {
+    case c.send <- data:
+    default:
+    }
+}
