@@ -75,9 +75,8 @@ func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		id:   "", // Will be set when client registers
 	}
 
-	client.hub.register <- client
-
-	// Start goroutines for reading/writing
+	// The client is added to the hub only once it sends a "register"
+	// message with a valid user ID (handled in client.handleMessage).
 	go client.writePump()
 	go client.readPump()
 }

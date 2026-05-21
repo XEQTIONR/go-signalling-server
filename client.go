@@ -3,8 +3,9 @@ package main
 import (
     "encoding/json"
     "log"
+    "sync"
     "time"
-    
+
     "github.com/gorilla/websocket"
 )
 
@@ -16,10 +17,20 @@ const (
 )
 
 type Client struct {
-    hub  *Hub
-    conn *websocket.Conn
-    send chan []byte
-    id   string
+    hub       *Hub
+    conn      *websocket.Conn
+    send      chan []byte
+    id        string
+    closeOnce sync.Once
+}
+
+// closeSend closes the send channel exactly once so that multiple
+// disconnect paths (broadcast eviction, unregister, shutdown) cannot
+// race and panic on a double close.
+func (c *Client) closeSend() {
+    c.closeOnce.Do(func() {
+        close(c.send)
+    })
 }
 
 // WebRTC signaling message types
@@ -32,7 +43,10 @@ type SignalMessage struct {
 
 func (c *Client) readPump() {
     defer func() {
-        c.hub.unregister <- c
+        select {
+        case c.hub.unregister <- c:
+        case <-c.hub.stop:
+        }
         c.conn.Close()
     }()
     
@@ -191,26 +205,27 @@ func (c *Client) writePump() {
     }
 }
 
-func (c *Client) sendError(message string) {
-    errorMsg := SignalMessage{
-        Type: "error",
-        Payload: json.RawMessage(`"` + message + `"`),
+func (c *Client) sendStatus(msgType, message string) {
+    payload, err := json.Marshal(message)
+    if err != nil {
+        log.Printf("failed to marshal %s payload: %v", msgType, err)
+        return
     }
-    data, _ := json.Marshal(errorMsg)
+    data, err := json.Marshal(SignalMessage{Type: msgType, Payload: payload})
+    if err != nil {
+        log.Printf("failed to marshal %s message: %v", msgType, err)
+        return
+    }
     select {
     case c.send <- data:
     default:
     }
 }
 
+func (c *Client) sendError(message string) {
+    c.sendStatus("error", message)
+}
+
 func (c *Client) sendSuccess(message string) {
-    successMsg := SignalMessage{
-        Type: "success",
-        Payload: json.RawMessage(`"` + message + `"`),
-    }
-    data, _ := json.Marshal(successMsg)
-    select {
-    case c.send <- data:
-    default:
-    }
+    c.sendStatus("success", message)
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"time"
 )
 
 type Hub struct {
@@ -11,10 +12,9 @@ type Hub struct {
 	clients   map[string]*Client
 	clientsMu sync.RWMutex
 
-	// Register requests
-	register chan *Client
-
-	// Unregister requests
+	// Unregister requests (the only path that drives the unregister case
+	// in Run; closing of client.send is funneled through Client.closeSend
+	// so it cannot happen twice).
 	unregister chan *Client
 
 	// Broadcast to all (for room broadcasts)
@@ -33,9 +33,8 @@ type Message struct {
 func NewHub() *Hub {
 	return &Hub{
 		clients:    make(map[string]*Client),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		broadcast:  make(chan []byte),
+		unregister: make(chan *Client, 32),
+		broadcast:  make(chan []byte, 32),
 		stop:       make(chan struct{}),
 	}
 }
@@ -43,37 +42,62 @@ func NewHub() *Hub {
 func (h *Hub) Run() {
 	for {
 		select {
-		case client := <-h.register:
-			// Wait for client to register with an ID
-			// Client will send a register message
-			log.Printf("Client %s registered", client.id)
-			continue
-
 		case client := <-h.unregister:
-			h.clientsMu.Lock()
-			if _, ok := h.clients[client.id]; ok {
-				delete(h.clients, client.id)
-				log.Printf("Client %s disconnected", client.id)
-			}
-			h.clientsMu.Unlock()
-			close(client.send)
+			h.removeClient(client)
 
 		case message := <-h.broadcast:
-			// Broadcast to all clients (useful for rooms)
-			h.clientsMu.RLock()
-			for _, client := range h.clients {
-				select {
-				case client.send <- message:
-				default:
-					close(client.send)
-					delete(h.clients, client.id)
-				}
-			}
-			h.clientsMu.RUnlock()
+			h.broadcastMessage(message)
 
 		case <-h.stop:
 			return
 		}
+	}
+}
+
+// removeClient deletes the client from the registry (if present) and
+// closes its send channel via the idempotent helper on Client.
+func (h *Hub) removeClient(client *Client) {
+	h.clientsMu.Lock()
+	if client.id != "" {
+		if existing, ok := h.clients[client.id]; ok && existing == client {
+			delete(h.clients, client.id)
+			log.Printf("Client %s disconnected", client.id)
+		}
+	}
+	h.clientsMu.Unlock()
+	client.closeSend()
+}
+
+// broadcastMessage delivers message to every connected client.
+// Clients whose send buffer is full are evicted; deletions happen under
+// a write lock rather than the read lock used during the send loop.
+func (h *Hub) broadcastMessage(message []byte) {
+	var dead []*Client
+
+	h.clientsMu.RLock()
+	for _, client := range h.clients {
+		select {
+		case client.send <- message:
+		default:
+			dead = append(dead, client)
+		}
+	}
+	h.clientsMu.RUnlock()
+
+	if len(dead) == 0 {
+		return
+	}
+
+	h.clientsMu.Lock()
+	for _, client := range dead {
+		if existing, ok := h.clients[client.id]; ok && existing == client {
+			delete(h.clients, client.id)
+		}
+	}
+	h.clientsMu.Unlock()
+
+	for _, client := range dead {
+		client.closeSend()
 	}
 }
 
@@ -92,17 +116,26 @@ func (h *Hub) RegisterClient(client *Client, userID string) bool {
 	return true
 }
 
+// UnregisterClient asks the hub to remove the named user. The actual
+// map mutation and channel close happen on the hub's own goroutine via
+// the unregister channel so that all close paths are serialized.
 func (h *Hub) UnregisterClient(userID string) {
-	h.clientsMu.Lock()
-	defer h.clientsMu.Unlock()
+	h.clientsMu.RLock()
+	client, ok := h.clients[userID]
+	h.clientsMu.RUnlock()
+	if !ok {
+		return
+	}
 
-	if client, ok := h.clients[userID]; ok {
-		delete(h.clients, userID)
-		close(client.send)
-		log.Printf("Client %s unregistered", userID)
+	select {
+	case h.unregister <- client:
+	case <-h.stop:
 	}
 }
 
+// SendToUser delivers a message to a specific user. It blocks up to
+// writeWait so that a momentarily-busy client does not lose signaling
+// messages, but evicts the client if the buffer stays full beyond that.
 func (h *Hub) SendToUser(userID string, message []byte) bool {
 	h.clientsMu.RLock()
 	client, ok := h.clients[userID]
@@ -112,15 +145,39 @@ func (h *Hub) SendToUser(userID string, message []byte) bool {
 		return false
 	}
 
+	timer := time.NewTimer(writeWait)
+	defer timer.Stop()
+
 	select {
 	case client.send <- message:
 		return true
-	default:
-		go h.UnregisterClient(userID)
+	case <-timer.C:
+		select {
+		case h.unregister <- client:
+		default:
+		}
+		return false
+	case <-h.stop:
 		return false
 	}
 }
 
+// Stop signals Run to exit and tears down all connected clients so that
+// any goroutine blocked on client.send unblocks and the WebSocket loops
+// can return cleanly.
 func (h *Hub) Stop() {
 	close(h.stop)
+
+	h.clientsMu.Lock()
+	clients := make([]*Client, 0, len(h.clients))
+	for id, client := range h.clients {
+		clients = append(clients, client)
+		delete(h.clients, id)
+	}
+	h.clientsMu.Unlock()
+
+	for _, client := range clients {
+		client.closeSend()
+		_ = client.conn.Close()
+	}
 }
