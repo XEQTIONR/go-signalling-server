@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
 	"sync"
 	"time"
@@ -21,13 +20,6 @@ type Hub struct {
 	broadcast chan []byte
 
 	stop chan struct{}
-}
-
-type Message struct {
-	Type string          `json:"type"`
-	From string          `json:"from,omitempty"`
-	To   string          `json:"to,omitempty"`
-	Data json.RawMessage `json:"data,omitempty"`
 }
 
 func NewHub() *Hub {
@@ -101,7 +93,7 @@ func (h *Hub) broadcastMessage(message []byte) {
 	}
 }
 
-func (h *Hub) RegisterClient(client *Client, userID string) bool {
+func (h *Hub) RegisterClient(client *Client, userID string, classID string) bool {
 	h.clientsMu.Lock()
 	defer h.clientsMu.Unlock()
 

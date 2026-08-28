@@ -6,10 +6,18 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
 )
+
+var dbConfig = redis.Options{
+	Addr:     "localhost:6379", // Redis host and port
+	Password: "",               // No password by default
+	DB:       0,                // Default database
+}
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -23,9 +31,16 @@ func main() {
 	hub := NewHub()
 	go hub.Run()
 
+	rdb := GetClient()
+
+	if rdb == nil {
+		InitRedis(dbConfig.Addr, dbConfig.Password, dbConfig.DB)
+		rdb = GetClient()
+	}
+
 	// HTTP endpoint for WebSocket upgrades
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		handleWebSocket(hub, w, r)
+		handleWebSocket(hub, rdb, w, r)
 	})
 
 	// Health check endpoint
@@ -61,7 +76,7 @@ func main() {
 	server.Close()
 }
 
-func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
+func handleWebSocket(hub *Hub, rdb *redis.Client, w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("WebSocket upgrade failed:", err)
@@ -69,10 +84,12 @@ func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		hub:  hub,
-		conn: conn,
-		send: make(chan []byte, 256),
-		id:   "", // Will be set when client registers
+		hub:       hub,
+		rdb:       rdb,
+		conn:      conn,
+		send:      make(chan []byte, 256),
+		id:        "", // Will be set when client registers
+		closeOnce: sync.Once{},
 	}
 
 	// The client is added to the hub only once it sends a "register"
