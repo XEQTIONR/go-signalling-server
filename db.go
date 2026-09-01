@@ -48,7 +48,29 @@ func SetValue(key string, value string) error {
 }
 
 func SetValues(key string, values []string) error {
-	return rdb.SAdd(ctx, key, values).Err()
+	if len(values) == 0 {
+		return rdb.Del(ctx, key).Err()
+	}
+
+	pipe := rdb.TxPipeline()
+	pipe.Del(ctx, key)
+	pipe.SAdd(ctx, key, values)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func AddToSet(key string, members ...string) error {
+	if len(members) == 0 {
+		return nil
+	}
+	return rdb.SAdd(ctx, key, members).Err()
+}
+
+func RemoveFromSet(key string, members ...string) error {
+	if len(members) == 0 {
+		return nil
+	}
+	return rdb.SRem(ctx, key, members).Err()
 }
 
 func DeleteValue(key string) error {

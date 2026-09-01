@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"log"
-	"slices"
 	"sync"
 	"time"
 
@@ -110,28 +109,34 @@ func (c *Client) handleMessage(msg SignalMessage) {
 			return
 		}
 
-		if !slices.Contains(classData, registerData.UserID) {
-			SetValues(registerData.ClassID, append(classData, registerData.UserID))
-			SetValue(registerData.UserID, registerData.ClassID)
+		if err := AddToSet(registerData.ClassID, registerData.UserID); err != nil {
+			c.sendError("Failed to save class data")
+			return
+		}
 
-			for _, userID := range classData {
-				if userID != registerData.UserID {
-					payload, err := json.Marshal(map[string]any{
-						"class_id": registerData.ClassID,
-						"user_id":  userID,
-					})
-					if err != nil {
-						log.Printf("failed to marshal new_user_joined payload: %v", err)
-						continue
-					}
-					data, _ := json.Marshal(SignalMessage{
-						Type:    "new_user_joined",
-						From:    registerData.UserID,
-						Payload: payload,
-					})
-					c.hub.SendToUser(userID, data)
-				}
+		if err := SetValue(registerData.UserID, registerData.ClassID); err != nil {
+			c.sendError("Failed to save user data")
+			return
+		}
+
+		for _, userID := range classData {
+			if userID == registerData.UserID {
+				continue
 			}
+			payload, err := json.Marshal(map[string]any{
+				"class_id": registerData.ClassID,
+				"user_id":  userID,
+			})
+			if err != nil {
+				log.Printf("failed to marshal new_user_joined payload: %v", err)
+				continue
+			}
+			data, _ := json.Marshal(SignalMessage{
+				Type:    "new_user_joined",
+				From:    registerData.UserID,
+				Payload: payload,
+			})
+			c.hub.SendToUser(userID, data)
 		}
 
 		c.sendSuccess("Registered successfully")
