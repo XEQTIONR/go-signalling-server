@@ -39,8 +39,16 @@ func GetValue(key string) (string, error) {
 	return rdb.Get(ctx, key).Result()
 }
 
+func GetValues(key string) ([]string, error) {
+	return rdb.SMembers(ctx, key).Result()
+}
+
 func SetValue(key string, value string) error {
 	return rdb.Set(ctx, key, value, 0).Err()
+}
+
+func SetValues(key string, values []string) error {
+	return rdb.SAdd(ctx, key, values).Err()
 }
 
 func DeleteValue(key string) error {

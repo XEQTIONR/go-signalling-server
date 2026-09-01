@@ -104,48 +104,32 @@ func (c *Client) handleMessage(msg SignalMessage) {
 		}
 
 		// bookkeeping
-		str, err := GetValue(registerData.ClassID)
-
+		classData, err := GetValues(registerData.ClassID)
 		if err != nil {
-			if err == redis.Nil {
-				val, err2 := json.Marshal([]string{registerData.UserID})
+			c.sendError("Failed to get class data")
+			return
+		}
 
-				if err2 != nil {
-					c.sendError("Failed to marshal class data")
-					return
-				}
-				SetValue(registerData.ClassID, string(val))
-			} else {
-				c.sendError("Failed to get class data")
-				return
-			}
-		} else {
-			var classData []string
-			var newClassData []string
-			json.Unmarshal([]byte(str), &classData)
+		if !slices.Contains(classData, registerData.UserID) {
+			SetValues(registerData.ClassID, append(classData, registerData.UserID))
+			SetValue(registerData.UserID, registerData.ClassID)
 
-			if !slices.Contains(classData, registerData.UserID) {
-				newClassData = append(classData, registerData.UserID)
-				val, _ := json.Marshal(newClassData)
-				SetValue(registerData.ClassID, string(val))
-
-				for _, userID := range newClassData {
-					if userID != registerData.UserID {
-						payload, err := json.Marshal(map[string]any{
-							"class_id": registerData.ClassID,
-							"user_id":  userID,
-						})
-						if err != nil {
-							log.Printf("failed to marshal new_user_joined payload: %v", err)
-							continue
-						}
-						data, _ := json.Marshal(SignalMessage{
-							Type:    "new_user_joined",
-							From:    registerData.UserID,
-							Payload: payload,
-						})
-						c.hub.SendToUser(userID, data)
+			for _, userID := range classData {
+				if userID != registerData.UserID {
+					payload, err := json.Marshal(map[string]any{
+						"class_id": registerData.ClassID,
+						"user_id":  userID,
+					})
+					if err != nil {
+						log.Printf("failed to marshal new_user_joined payload: %v", err)
+						continue
 					}
+					data, _ := json.Marshal(SignalMessage{
+						Type:    "new_user_joined",
+						From:    registerData.UserID,
+						Payload: payload,
+					})
+					c.hub.SendToUser(userID, data)
 				}
 			}
 		}
@@ -209,6 +193,8 @@ func (c *Client) handleMessage(msg SignalMessage) {
 		c.hub.SendToUser(msg.To, data)
 
 	case "hangup":
+		// The person you were on a call with hung up
+		// @TODO: Rework this
 		// {"type":"hangup","to":"bob456"}
 		if c.id == "" {
 			return

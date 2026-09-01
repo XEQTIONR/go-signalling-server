@@ -35,7 +35,48 @@ func (h *Hub) Run() {
 	for {
 		select {
 		case client := <-h.unregister:
+
 			h.removeClient(client)
+
+			id := client.id
+			classId, err := GetValue(id)
+
+			if err != nil {
+				log.Printf("Error getting class ID for client %s: %v", id, err)
+				continue
+			}
+
+			if err := DeleteValue(id); err != nil {
+				log.Printf("Error deleting value for client %s: %v", id, err)
+				continue
+			}
+
+			arr, err := GetValues(classId)
+
+			if err != nil {
+				log.Printf("Error getting array for class ID %s: %v", classId, err)
+				continue
+			}
+
+			result := []string{}
+
+			for _, item := range arr {
+				if item != id {
+					result = append(result, item)
+				}
+			}
+
+			if len(result) == 0 {
+				if err := DeleteValue(classId); err != nil {
+					log.Printf("Error deleting value for class ID %s: %v", classId, err)
+					continue
+				}
+				continue
+			}
+
+			if err := SetValues(classId, result); err != nil {
+				log.Printf("Error setting value for class ID %s: %v", classId, err)
+			}
 
 		case message := <-h.broadcast:
 			h.broadcastMessage(message)
