@@ -125,14 +125,13 @@ func (c *Client) handleMessage(msg SignalMessage) {
 			}
 			payload, err := json.Marshal(map[string]any{
 				"class_id": registerData.ClassID,
-				"user_id":  userID,
 			})
 			if err != nil {
-				log.Printf("failed to marshal new_user_joined payload: %v", err)
+				log.Printf("failed to marshal user_joined payload: %v", err)
 				continue
 			}
 			data, _ := json.Marshal(SignalMessage{
-				Type:    "new_user_joined",
+				Type:    "user_joined",
 				From:    registerData.UserID,
 				Payload: payload,
 			})
@@ -197,21 +196,21 @@ func (c *Client) handleMessage(msg SignalMessage) {
 		data, _ := json.Marshal(forwardMsg)
 		c.hub.SendToUser(msg.To, data)
 
-	case "hangup":
-		// The person you were on a call with hung up
-		// @TODO: Rework this
-		// {"type":"hangup","to":"bob456"}
-		if c.id == "" {
-			return
-		}
+	// case "hangup":
+	// 	// The person you were on a call with hung up
+	// 	// @TODO: Rework this
+	// 	// {"type":"hangup","to":"bob456"}
+	// 	if c.id == "" {
+	// 		return
+	// 	}
 
-		forwardMsg := SignalMessage{
-			Type: "hangup",
-			From: c.id,
-		}
+	// 	forwardMsg := SignalMessage{
+	// 		Type: "hangup",
+	// 		From: c.id,
+	// 	}
 
-		data, _ := json.Marshal(forwardMsg)
-		c.hub.SendToUser(msg.To, data)
+	// 	data, _ := json.Marshal(forwardMsg)
+	// 	c.hub.SendToUser(msg.To, data)
 
 	default:
 		log.Printf("Unknown message type: %s", msg.Type)

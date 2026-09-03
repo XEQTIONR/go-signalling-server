@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"sync"
 	"time"
@@ -52,6 +53,32 @@ func (h *Hub) Run() {
 
 			if err := DeleteValue(id); err != nil {
 				log.Printf("Error deleting value for client %s: %v", id, err)
+			}
+
+			remainingClients, err := GetValues(classId)
+			if err != nil {
+				log.Printf("Error getting remaining clients for class %s: %v", classId, err)
+				continue
+			}
+			if len(remainingClients) > 0 {
+
+				for _, clientID := range remainingClients {
+					if clientID == id {
+						continue
+					}
+
+					forwardMsg := SignalMessage{
+						Type: "user_left",
+						From: id,
+					}
+
+					if data, err := json.Marshal(forwardMsg); err == nil {
+						h.SendToUser(clientID, data)
+					} else {
+						log.Printf("Error marshalling message for client %s: %v", clientID, err)
+						continue
+					}
+				}
 			}
 
 		case message := <-h.broadcast:
