@@ -97,7 +97,7 @@ func (c *Client) handleMessage(msg SignalMessage) {
 			return
 		}
 
-		if !c.hub.RegisterClient(c, registerData.UserID, registerData.ClassID) {
+		if !c.hub.RegisterClient(c, registerData.UserID) {
 			c.sendError("User already connected")
 			return
 		}
@@ -108,6 +108,7 @@ func (c *Client) handleMessage(msg SignalMessage) {
 			c.sendError("Failed to get class data")
 			return
 		}
+		log.Printf("AddToSet: %v, %v", registerData.ClassID, registerData.UserID)
 
 		if err := AddToSet(registerData.ClassID, registerData.UserID); err != nil {
 			c.sendError("Failed to save class data")

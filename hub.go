@@ -137,7 +137,7 @@ func (h *Hub) broadcastMessage(message []byte) {
 	}
 }
 
-func (h *Hub) RegisterClient(client *Client, userID string, classID string) bool {
+func (h *Hub) RegisterClient(client *Client, userID string) bool {
 	h.clientsMu.Lock()
 	defer h.clientsMu.Unlock()
 
