@@ -197,6 +197,35 @@ func (c *Client) handleMessage(msg SignalMessage) {
 		data, _ := json.Marshal(forwardMsg)
 		c.hub.SendToUser(msg.To, data)
 
+	case "draw-path":
+		// {"type":"draw-path","to":"1","payload":{"path":{...}}}
+		if c.id == "" {
+			c.sendError("Not registered")
+			return
+		}
+
+		if msg.To == "" {
+			c.sendError("Missing target user")
+			return
+		}
+
+		forwardMsg := SignalMessage{
+			Type:    "partner-drew-path",
+			From:    c.id,
+			To:      msg.To,
+			Payload: msg.Payload,
+		}
+
+		data, err := json.Marshal(forwardMsg)
+		if err != nil {
+			log.Printf("failed to marshal draw-path message: %v", err)
+			c.sendError("Failed to forward draw-path")
+			return
+		}
+		if !c.hub.SendToUser(msg.To, data) {
+			c.sendError("User not connected: " + msg.To)
+		}
+
 	// case "hangup":
 	// 	// The person you were on a call with hung up
 	// 	// @TODO: Rework this
